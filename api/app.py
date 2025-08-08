@@ -420,7 +420,6 @@ def internal_error(e):
         'message': 'An unexpected error occurred'
     }), 500
 
-@app.before_first_request
 def startup_message():
     """Log startup information"""
     app.logger.info("="*80)
@@ -431,6 +430,9 @@ def startup_message():
     app.logger.info(f"File cleanup after: {MAX_FILE_AGE_MINUTES} minutes")
     app.logger.info(f"API Key configured: {'Yes' if API_KEY != 'change-me-in-production' else 'No (using default)'}")
     app.logger.info("="*80)
+
+# Call startup message when the module is loaded
+startup_message()
 
 if __name__ == '__main__':
     # Start cleanup thread
