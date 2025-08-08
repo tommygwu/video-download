@@ -11,6 +11,7 @@ import hashlib
 import time
 import tempfile
 import threading
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,14 @@ from werkzeug.exceptions import RequestEntityTooLarge
 import yt_dlp
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+app.logger.setLevel(logging.INFO)
 
 # Configuration
 DOWNLOAD_DIR = os.environ.get('DOWNLOAD_DIR', '/tmp/downloads')
@@ -38,6 +47,44 @@ Path(DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
 # Cleanup thread management
 cleanup_thread = None
+
+def log_request(f):
+    """Decorator to log incoming requests"""
+    def decorated_function(*args, **kwargs):
+        # Log request details
+        app.logger.info(f"{'='*60}")
+        app.logger.info(f"REQUEST RECEIVED: {request.method} {request.path}")
+        app.logger.info(f"Client IP: {request.remote_addr}")
+        app.logger.info(f"User-Agent: {request.headers.get('User-Agent', 'Unknown')}")
+        
+        # Log request body for POST requests
+        if request.method == 'POST' and request.is_json:
+            data = request.get_json()
+            if data and 'url' in data:
+                app.logger.info(f"Requested URL: {data['url']}")
+                app.logger.info(f"Format: {data.get('format', 'default')}")
+        
+        start_time = time.time()
+        
+        try:
+            # Execute the actual function
+            result = f(*args, **kwargs)
+            
+            # Log response details
+            elapsed_time = time.time() - start_time
+            status_code = result[1] if isinstance(result, tuple) else 200
+            app.logger.info(f"RESPONSE: Status {status_code} - Completed in {elapsed_time:.2f}s")
+            app.logger.info(f"{'='*60}")
+            
+            return result
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            app.logger.error(f"REQUEST FAILED: {str(e)} - Failed after {elapsed_time:.2f}s")
+            app.logger.info(f"{'='*60}")
+            raise
+    
+    decorated_function.__name__ = f.__name__
+    return decorated_function
 
 def require_api_key(f):
     """Decorator for API key authentication"""
@@ -82,6 +129,7 @@ def cleanup_old_files():
             app.logger.error(f"Error in cleanup thread: {e}")
 
 @app.route('/health', methods=['GET'])
+@log_request
 def health_check():
     """Health check endpoint for monitoring"""
     try:
@@ -103,6 +151,7 @@ def health_check():
 
 @app.route('/api/info', methods=['POST'])
 @require_api_key
+@log_request
 def get_video_info():
     """Get video metadata without downloading"""
     try:
@@ -173,6 +222,7 @@ def get_video_info():
 
 @app.route('/api/download', methods=['POST'])
 @require_api_key
+@log_request
 def download_video():
     """Download video and return it directly"""
     try:
@@ -191,36 +241,59 @@ def download_video():
         video_id = hashlib.md5(f"{url}{time.time()}".encode()).hexdigest()[:12]
         output_template = os.path.join(DOWNLOAD_DIR, f'{video_id}.%(ext)s')
         
+        # Progress tracking function
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                percent = d.get('_percent_str', 'N/A')
+                speed = d.get('_speed_str', 'N/A')
+                eta = d.get('_eta_str', 'N/A')
+                app.logger.info(f"Download progress: {percent} | Speed: {speed} | ETA: {eta}")
+            elif d['status'] == 'finished':
+                app.logger.info(f"Download finished, now processing...")
+            elif d['status'] == 'error':
+                app.logger.error(f"Download error: {d.get('error', 'Unknown error')}")
+        
         # yt-dlp options
         ydl_opts = {
             'outtmpl': output_template,
             'format': format_preference,
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,  # Enable output for better logging
+            'no_warnings': False,
             'noplaylist': True,
             'max_filesize': MAX_DOWNLOAD_SIZE_MB * 1024 * 1024,
             'match_filter': lambda info: None if info.get('duration', 0) <= max_duration else 'Video too long',
-            'progress_hooks': [lambda d: app.logger.info(f"Download progress: {d.get('status')}")],
+            'progress_hooks': [progress_hook],
+            'logger': app.logger,  # Use Flask's logger
         }
         
         # Download the video
-        app.logger.info(f"Starting download for URL: {url[:50]}...")
+        app.logger.info(f"Starting download for URL: {url}")
+        app.logger.info(f"Format preference: {format_preference}")
+        app.logger.info(f"Max duration: {max_duration}s, Max size: {MAX_DOWNLOAD_SIZE_MB}MB")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            
+            # Log extracted video info
+            app.logger.info(f"Video title: {info.get('title', 'Unknown')}")
+            app.logger.info(f"Video duration: {info.get('duration_string', 'Unknown')}")
+            app.logger.info(f"Video uploader: {info.get('uploader', 'Unknown')}")
             
             # Find the downloaded file
             ext = info.get('ext', 'mp4')
             downloaded_file = output_template.replace('%(ext)s', ext)
             
             if not os.path.exists(downloaded_file):
+                app.logger.warning(f"File not found at expected path: {downloaded_file}")
                 # Try to find file with different extension
                 for file in os.listdir(DOWNLOAD_DIR):
                     if file.startswith(video_id):
                         downloaded_file = os.path.join(DOWNLOAD_DIR, file)
+                        app.logger.info(f"Found file at: {downloaded_file}")
                         break
             
             if not os.path.exists(downloaded_file):
+                app.logger.error(f"Downloaded file not found! Video ID: {video_id}")
                 return jsonify({
                     'success': False,
                     'error': 'Download failed',
@@ -228,7 +301,10 @@ def download_video():
                 }), 500
             
             file_size = os.path.getsize(downloaded_file)
-            app.logger.info(f"Download complete: {downloaded_file} ({file_size} bytes)")
+            file_size_mb = file_size / (1024 * 1024)
+            app.logger.info(f"✅ DOWNLOAD COMPLETE: {downloaded_file}")
+            app.logger.info(f"File size: {file_size_mb:.2f} MB ({file_size} bytes)")
+            app.logger.info(f"Video title: {info.get('title', 'video')}.{ext}")
             
             # Schedule cleanup after response
             cleanup_file(downloaded_file, delay=120)
@@ -258,6 +334,7 @@ def download_video():
 
 @app.route('/api/stream', methods=['POST'])
 @require_api_key
+@log_request
 def stream_video():
     """Stream video download for large files (experimental)"""
     try:
@@ -343,6 +420,18 @@ def internal_error(e):
         'message': 'An unexpected error occurred'
     }), 500
 
+@app.before_first_request
+def startup_message():
+    """Log startup information"""
+    app.logger.info("="*80)
+    app.logger.info("YT-DLP API SERVER STARTED")
+    app.logger.info(f"Environment: {os.environ.get('FLASK_ENV', 'development')}")
+    app.logger.info(f"Download directory: {DOWNLOAD_DIR}")
+    app.logger.info(f"Max file size: {MAX_DOWNLOAD_SIZE_MB} MB")
+    app.logger.info(f"File cleanup after: {MAX_FILE_AGE_MINUTES} minutes")
+    app.logger.info(f"API Key configured: {'Yes' if API_KEY != 'change-me-in-production' else 'No (using default)'}")
+    app.logger.info("="*80)
+
 if __name__ == '__main__':
     # Start cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_old_files, daemon=True)
@@ -352,4 +441,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
     
+    app.logger.info(f"Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=debug)
