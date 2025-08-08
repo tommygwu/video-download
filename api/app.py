@@ -52,9 +52,9 @@ cleanup_thread = None
 # Cookie configuration
 YOUTUBE_COOKIES_BASE64 = os.environ.get('YOUTUBE_COOKIES_BASE64', '')
 USE_COOKIES_FALLBACK = os.environ.get('USE_COOKIES_FALLBACK', 'true').lower() == 'true'
-DEFAULT_PLAYER_CLIENT = os.environ.get('DEFAULT_PLAYER_CLIENT', 'ios')
-# Default fallback order: iOS → cookies → Android
-FALLBACK_ORDER = os.environ.get('FALLBACK_ORDER', 'ios,cookies,android').split(',')
+DEFAULT_PLAYER_CLIENT = os.environ.get('DEFAULT_PLAYER_CLIENT', 'tv')
+# Default fallback order: TV → iOS → cookies → Android
+FALLBACK_ORDER = os.environ.get('FALLBACK_ORDER', 'tv,ios,cookies,android').split(',')
 
 def get_cookies_file():
     """Create temporary cookies file from base64 environment variable"""
@@ -112,10 +112,11 @@ def create_ydl_opts_with_fallback(base_opts, url, player_client=None):
     
     return opts
 
-def download_with_fallback(url, base_opts, fallback_order=None):
+def extract_info_with_fallback(url, base_opts, fallback_order=None, download=False):
     """
-    Attempt to download with fallback strategy.
+    Attempt to extract info (and optionally download) with fallback strategy.
     Returns (success, info, downloaded_file) tuple.
+    downloaded_file will be None if download=False.
     """
     if fallback_order is None:
         fallback_order = FALLBACK_ORDER
@@ -124,7 +125,7 @@ def download_with_fallback(url, base_opts, fallback_order=None):
     cookies_file = None
     
     for method in fallback_order:
-        app.logger.info(f"Attempting download with method: {method}")
+        app.logger.info(f"Attempting {'download' if download else 'info extraction'} with method: {method}")
         
         try:
             opts = base_opts.copy()
@@ -147,33 +148,35 @@ def download_with_fallback(url, base_opts, fallback_order=None):
                 opts['extractor_args'] = {'youtube': {'player_client': [method]}}
                 app.logger.info(f"Using player client: {method}")
             
-            # Attempt download
+            # Attempt extraction/download
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                info = ydl.extract_info(url, download=download)
                 
-                # Find the downloaded file
-                output_template = opts.get('outtmpl', '')
-                ext = info.get('ext', 'mp4')
-                downloaded_file = output_template.replace('%(ext)s', ext)
+                downloaded_file = None
+                if download:
+                    # Find the downloaded file
+                    output_template = opts.get('outtmpl', '')
+                    ext = info.get('ext', 'mp4')
+                    downloaded_file = output_template.replace('%(ext)s', ext)
+                    
+                    # Check if file exists
+                    if not os.path.exists(downloaded_file):
+                        # Try to find file with different extension
+                        base_path = os.path.dirname(output_template)
+                        base_name = os.path.basename(output_template).split('.')[0]
+                        for file in os.listdir(base_path):
+                            if file.startswith(base_name):
+                                downloaded_file = os.path.join(base_path, file)
+                                break
+                    
+                    if not os.path.exists(downloaded_file):
+                        raise Exception(f"Downloaded file not found after {method} download")
                 
-                # Check if file exists
-                if not os.path.exists(downloaded_file):
-                    # Try to find file with different extension
-                    base_path = os.path.dirname(output_template)
-                    base_name = os.path.basename(output_template).split('.')[0]
-                    for file in os.listdir(base_path):
-                        if file.startswith(base_name):
-                            downloaded_file = os.path.join(base_path, file)
-                            break
-                
-                if os.path.exists(downloaded_file):
-                    app.logger.info(f"✅ Download successful with {method}")
-                    # Cleanup cookies if used
-                    if cookies_file:
-                        threading.Timer(5, lambda: cleanup_cookies_file(cookies_file)).start()
-                    return True, info, downloaded_file
-                else:
-                    raise Exception(f"Downloaded file not found after {method} download")
+                app.logger.info(f"✅ {'Download' if download else 'Info extraction'} successful with {method}")
+                # Cleanup cookies if used
+                if cookies_file:
+                    threading.Timer(5, lambda: cleanup_cookies_file(cookies_file)).start()
+                return True, info, downloaded_file
                     
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
@@ -200,8 +203,15 @@ def download_with_fallback(url, base_opts, fallback_order=None):
         cleanup_cookies_file(cookies_file)
     
     # All methods failed
-    app.logger.error(f"All download methods failed. Last error: {last_error}")
+    app.logger.error(f"All {'download' if download else 'info extraction'} methods failed. Last error: {last_error}")
     return False, None, None
+
+def download_with_fallback(url, base_opts, fallback_order=None):
+    """
+    Attempt to download with fallback strategy.
+    Returns (success, info, downloaded_file) tuple.
+    """
+    return extract_info_with_fallback(url, base_opts, fallback_order, download=True)
 
 def log_request(f):
     """Decorator to log incoming requests"""
@@ -320,7 +330,7 @@ def get_video_info():
         
         # Get player client preference
         player_client = data.get('player_client', DEFAULT_PLAYER_CLIENT)
-        if player_client not in ['ios', 'android', 'mweb', 'web', 'cookies']:
+        if player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies']:
             player_client = DEFAULT_PLAYER_CLIENT
         
         base_opts = {
@@ -331,43 +341,58 @@ def get_video_info():
             'extract_flat': False,
         }
         
-        # Create options with fallback support
-        ydl_opts = create_ydl_opts_with_fallback(base_opts, url, player_client)
+        # Use fallback mechanism for info extraction
+        if player_client and player_client != 'auto':
+            # Create custom fallback order with user-specified client first
+            custom_fallback_order = [player_client]
+            for method in FALLBACK_ORDER:
+                if method != player_client:
+                    custom_fallback_order.append(method)
+            app.logger.info(f"Using custom fallback order for info: {custom_fallback_order}")
+            success, info, _ = extract_info_with_fallback(url, base_opts, custom_fallback_order, download=False)
+        else:
+            # Use default fallback order
+            success, info, _ = extract_info_with_fallback(url, base_opts, download=False)
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            # Extract relevant metadata
-            metadata = {
-                'success': True,
-                'data': {
-                    'title': info.get('title'),
-                    'duration': info.get('duration'),
-                    'duration_string': info.get('duration_string'),
-                    'thumbnail': info.get('thumbnail'),
-                    'uploader': info.get('uploader'),
-                    'upload_date': info.get('upload_date'),
-                    'view_count': info.get('view_count'),
-                    'like_count': info.get('like_count'),
-                    'description': info.get('description', '')[:500],  # Limit description length
-                    'webpage_url': info.get('webpage_url'),
-                    'extractor': info.get('extractor'),
-                    'formats_available': len(info.get('formats', [])),
-                    'filesize_approx': info.get('filesize_approx'),
-                }
+        if not success:
+            app.logger.error(f"All info extraction methods failed for URL: {url}")
+            return jsonify({
+                'success': False,
+                'error': 'Info extraction failed',
+                'message': 'All methods failed to extract video information. Please try again later.'
+            }), 503
+        
+        # Extract relevant metadata
+        metadata = {
+            'success': True,
+            'data': {
+                'title': info.get('title'),
+                'duration': info.get('duration'),
+                'duration_string': info.get('duration_string'),
+                'thumbnail': info.get('thumbnail'),
+                'uploader': info.get('uploader'),
+                'upload_date': info.get('upload_date'),
+                'view_count': info.get('view_count'),
+                'like_count': info.get('like_count'),
+                'description': info.get('description', '')[:500],  # Limit description length
+                'webpage_url': info.get('webpage_url'),
+                'extractor': info.get('extractor'),
+                'formats_available': len(info.get('formats', [])),
+                'filesize_approx': info.get('filesize_approx'),
             }
-            
-            # Try to get best format filesize
-            if info.get('formats'):
-                best_format = max(
-                    (f for f in info['formats'] if f.get('filesize')),
-                    key=lambda x: x.get('filesize', 0),
-                    default=None
-                )
-                if best_format:
-                    metadata['data']['filesize_approx'] = best_format.get('filesize')
-            
-            return jsonify(metadata)
+        }
+        
+        # Try to get best format filesize
+        if info.get('formats'):
+            best_format = max(
+                (f for f in info['formats'] if f.get('filesize')),
+                key=lambda x: x.get('filesize', 0),
+                default=None
+            )
+            if best_format:
+                metadata['data']['filesize_approx'] = best_format.get('filesize')
+        
+        return jsonify(metadata)
             
     except yt_dlp.utils.DownloadError as e:
         return jsonify({
@@ -402,7 +427,7 @@ def download_video():
         
         # Get player client preference
         player_client = data.get('player_client', DEFAULT_PLAYER_CLIENT)
-        if player_client not in ['ios', 'android', 'mweb', 'web', 'cookies']:
+        if player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies']:
             player_client = DEFAULT_PLAYER_CLIENT
         
         # Generate unique filename
@@ -439,42 +464,27 @@ def download_video():
         app.logger.info(f"Format preference: {format_preference}")
         app.logger.info(f"Max duration: {max_duration}s, Max size: {MAX_DOWNLOAD_SIZE_MB}MB")
         
-        # If player_client specified, use it directly; otherwise use fallback
+        # Always use fallback mechanism, but prioritize user-specified client
         if player_client and player_client != 'auto':
-            # User specified a client, try it without fallback
-            ydl_opts = create_ydl_opts_with_fallback(base_opts, url, player_client)
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    
-                    # Find the downloaded file
-                    ext = info.get('ext', 'mp4')
-                    downloaded_file = output_template.replace('%(ext)s', ext)
-                    
-                    if not os.path.exists(downloaded_file):
-                        # Try to find file with different extension
-                        for file in os.listdir(DOWNLOAD_DIR):
-                            if file.startswith(video_id):
-                                downloaded_file = os.path.join(DOWNLOAD_DIR, file)
-                                break
-            except Exception as e:
-                app.logger.error(f"Specified method {player_client} failed: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': 'Download failed',
-                    'message': f'Specified method {player_client} failed: {str(e)}'
-                }), 400
+            # Create custom fallback order with user-specified client first
+            custom_fallback_order = [player_client]
+            # Add remaining methods from default order, excluding the specified one
+            for method in FALLBACK_ORDER:
+                if method != player_client:
+                    custom_fallback_order.append(method)
+            app.logger.info(f"Using custom fallback order: {custom_fallback_order}")
+            success, info, downloaded_file = download_with_fallback(url, base_opts, custom_fallback_order)
         else:
-            # Use fallback mechanism
+            # Use default fallback order
             success, info, downloaded_file = download_with_fallback(url, base_opts)
-            
-            if not success:
-                app.logger.error(f"All download methods failed for URL: {url}")
-                return jsonify({
-                    'success': False,
-                    'error': 'Download failed',
-                    'message': 'All download methods failed. Please try again later or use a different video.'
-                }), 503
+        
+        if not success:
+            app.logger.error(f"All download methods failed for URL: {url}")
+            return jsonify({
+                'success': False,
+                'error': 'Download failed',
+                'message': 'All download methods failed. Please try again later or use a different video.'
+            }), 503
         
         # Verify file exists
         if not os.path.exists(downloaded_file):
@@ -537,10 +547,61 @@ def stream_video():
         
         # Get player client preference
         player_client = data.get('player_client', DEFAULT_PLAYER_CLIENT)
-        if player_client not in ['ios', 'android', 'mweb', 'web', 'cookies']:
+        if player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies']:
             player_client = DEFAULT_PLAYER_CLIENT
         
         app.logger.info(f"Streaming with player client: {player_client}")
+        
+        # Pre-validate that we can extract info before starting stream
+        test_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+        }
+        
+        # Determine fallback order
+        if player_client and player_client != 'auto':
+            custom_fallback_order = [player_client]
+            for method in FALLBACK_ORDER:
+                if method != player_client:
+                    custom_fallback_order.append(method)
+            fallback_order = custom_fallback_order
+        else:
+            fallback_order = FALLBACK_ORDER
+        
+        # Test which method works
+        working_method = None
+        for method in fallback_order:
+            test_opts_copy = test_opts.copy()
+            if method == 'cookies':
+                if not USE_COOKIES_FALLBACK:
+                    continue
+                cookies_file = get_cookies_file()
+                if cookies_file:
+                    test_opts_copy['cookiefile'] = cookies_file
+                    cleanup_cookies_file(cookies_file)
+                else:
+                    continue
+            else:
+                test_opts_copy['extractor_args'] = {'youtube': {'player_client': [method]}}
+            
+            try:
+                with yt_dlp.YoutubeDL(test_opts_copy) as ydl:
+                    ydl.extract_info(url, download=False)
+                    working_method = method
+                    app.logger.info(f"Found working method for streaming: {method}")
+                    break
+            except:
+                continue
+        
+        if not working_method:
+            app.logger.error("No working method found for streaming")
+            return jsonify({
+                'success': False,
+                'error': 'Stream failed',
+                'message': 'Unable to access video for streaming'
+            }), 503
         
         def generate():
             """Generator function for streaming response"""
@@ -554,13 +615,22 @@ def stream_video():
                     'noplaylist': True,
                 }
                 
-                # Create options with fallback support
-                ydl_opts = create_ydl_opts_with_fallback(base_opts, url, player_client)
+                # Use the working method
+                if working_method == 'cookies':
+                    cookies_file = get_cookies_file()
+                    if cookies_file:
+                        base_opts['cookiefile'] = cookies_file
+                else:
+                    base_opts['extractor_args'] = {'youtube': {'player_client': [working_method]}}
                 
                 try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    with yt_dlp.YoutubeDL(base_opts) as ydl:
                         # Download to temporary file
                         info = ydl.extract_info(url, download=True)
+                        
+                        # Cleanup cookies if used
+                        if working_method == 'cookies' and 'cookiefile' in base_opts:
+                            cleanup_cookies_file(base_opts['cookiefile'])
                         
                         # Stream file contents
                         chunk_size = 4096
@@ -573,6 +643,9 @@ def stream_video():
                                 
                 except Exception as e:
                     app.logger.error(f"Streaming error: {e}")
+                    # Cleanup cookies on error
+                    if working_method == 'cookies' and 'cookiefile' in base_opts:
+                        cleanup_cookies_file(base_opts['cookiefile'])
                     yield json.dumps({'error': str(e)}).encode()
         
         return Response(
