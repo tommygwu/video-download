@@ -34,11 +34,24 @@ https://yt-dlp-api.onrender.com
 3. Configure:
    - **Name**: yt-dlp API
    - **Header Name**: X-API-Key
-   - **Header Value**: [Your API key]
+   - **Header Value**: [Your actual API key value, not the service name]
+
+**Important**: Enter your actual API key value (e.g., `ytdlp_abc123...`), not the Render service name.
+
+## Important: Handling Render.com Free Tier Cold Starts
+
+⚠️ **Critical for Free Tier Users**: Render.com free tier services spin down after 15 minutes of inactivity. The first request after a cold start takes approximately 2 minutes to respond. Your n8n workflow MUST account for this delay.
+
+### Solutions for Cold Start Issues:
+
+1. **Increase Timeout**: Set HTTP Request timeout to at least 180000ms (3 minutes)
+2. **Implement Retry Logic**: Use n8n's retry functionality or create a custom retry workflow
+3. **Wake-up Strategy**: Send a health check request first to wake the service
+4. **Keep-Alive**: Set up a cron job to ping the service every 10 minutes
 
 ## Workflow Examples
 
-### Basic Download Workflow
+### Basic Download Workflow (with Cold Start Handling)
 
 ```json
 {
@@ -58,6 +71,10 @@ https://yt-dlp-api.onrender.com
             {
               "name": "video_url",
               "value": "https://www.youtube.com/watch?v=LCEmiRjPEtQ"
+            },
+            {
+              "name": "format",
+              "value": "best[ext=mp4]/best"
             }
           ]
         }
@@ -69,40 +86,20 @@ https://yt-dlp-api.onrender.com
       "position": [650, 300],
       "parameters": {
         "method": "POST",
-        "url": "https://yt-dlp-api.onrender.com/api/download",
+        "url": "https://yt-dlp-api-b1mh.onrender.com/api/download",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-API-Key",
-              "value": "={{$credentials.apiKey}}"
-            }
-          ]
-        },
         "sendBody": true,
-        "contentType": "json",
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "url",
-              "value": "={{$json.video_url}}"
-            },
-            {
-              "name": "format",
-              "value": "best[ext=mp4]/best"
-            }
-          ]
-        },
+        "bodyContentType": "json",
+        "jsonParameters": true,
         "options": {
-          "response": {
-            "response": {
-              "responseFormat": "file"
-            }
-          },
-          "timeout": 300000
-        }
+          "timeout": 180000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 120000
+          }
+        },
+        "bodyParametersJson": "{\n  \"url\": \"{{$json.video_url}}\",\n  \"format\": \"{{$json.format}}\"\n}"
       }
     }
   ],
@@ -111,6 +108,73 @@ https://yt-dlp-api.onrender.com
       "main": [[{"node": "Set Video URL", "type": "main", "index": 0}]]
     },
     "Set Video URL": {
+      "main": [[{"node": "Download Video", "type": "main", "index": 0}]]
+    }
+  }
+}
+```
+
+### Wake-Up Strategy Workflow
+
+This workflow first wakes up the Render service before attempting to download:
+
+```json
+{
+  "nodes": [
+    {
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "position": [250, 300]
+    },
+    {
+      "name": "Wake Up Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "https://yt-dlp-api-b1mh.onrender.com/health",
+        "options": {
+          "timeout": 180000,
+          "ignoreResponseCode": true
+        }
+      }
+    },
+    {
+      "name": "Wait for Warm Up",
+      "type": "n8n-nodes-base.wait",
+      "position": [650, 300],
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "Download Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [850, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://yt-dlp-api-b1mh.onrender.com/api/download",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 300000
+        },
+        "bodyParametersJson": "{\n  \"url\": \"{{$json.video_url}}\",\n  \"format\": \"best[ext=mp4]/best\"\n}"
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Wake Up Service", "type": "main", "index": 0}]]
+    },
+    "Wake Up Service": {
+      "main": [[{"node": "Wait for Warm Up", "type": "main", "index": 0}]]
+    },
+    "Wait for Warm Up": {
       "main": [[{"node": "Download Video", "type": "main", "index": 0}]]
     }
   }
@@ -277,6 +341,35 @@ https://yt-dlp-api.onrender.com
 }
 ```
 
+## n8n HTTP Node Configuration Guide
+
+### Correct Settings for Your HTTP Node:
+
+1. **Parameters Tab:**
+   - **Method**: POST
+   - **URL**: `https://yt-dlp-api-b1mh.onrender.com/api/download` (use your actual URL)
+   - **Authentication**: Generic Credential Type
+   - **Generic Auth Type**: Header Auth
+   - **Header Auth**: Select your created credential (NOT the text "Video Download | Render.com")
+   - **Send Body**: ON (enabled)
+   - **Body Content Type**: JSON
+   - **Specify Body**: Using Fields Below
+   - **Body Parameters**:
+     - Name: `url`, Value: `{{$json.video_url}}` (or your video URL)
+     - Name: `format`, Value: `best[ext=mp4]/best`
+
+2. **Settings Tab:**
+   - **Response**:
+     - Include Response Headers and Status: ON (for debugging)
+     - Never Error: OFF (to see actual errors)
+     - Response Format: File
+     - Put Output in Field: `data`
+   - **Timeout**: `180000` (3 minutes minimum for cold starts)
+
+3. **Add Retry Option** (click "Add option"):
+   - Max Tries: 3
+   - Wait Between Tries: 120000 (2 minutes)
+
 ## Configuration Options
 
 ### Environment Variables in n8n
@@ -326,26 +419,39 @@ Add error handling to your workflows:
 
 ### Common Issues
 
-1. **401 Unauthorized**
-   - Check your API key
+1. **503 Service Unavailable / "Service unavailable - try again later"**
+   - **Cause**: Render.com free tier service is cold (spun down)
+   - **Solution 1**: Set HTTP timeout to 180000ms (3 minutes) minimum
+   - **Solution 2**: Enable retry with 3 attempts and 120000ms between tries
+   - **Solution 3**: Use wake-up strategy workflow (see example above)
+   - **Prevention**: Set up external cron job to ping `/health` every 10 minutes
+
+2. **401 Unauthorized**
+   - Check your API key value (not service name)
    - Ensure X-API-Key header is set correctly
+   - Verify credentials in n8n match Render environment variable
 
-2. **Timeout Errors**
-   - Increase timeout in HTTP Request node
-   - Check if service is spinning up (2-minute delay)
+3. **Timeout Errors (even with high timeout)**
+   - Service might need more than 2 minutes to start
+   - Try timeout of 300000ms (5 minutes)
+   - Check Render dashboard for deployment status
+   - Consider upgrading to paid tier for always-on service
 
-3. **503 Service Unavailable**
-   - Service might be spinning up
-   - Wait 2 minutes and retry
+4. **"Never Error" masking real issues**
+   - Disable "Never Error" option in HTTP node
+   - Enable "Include Response Headers and Status"
+   - Check actual error messages in response
 
-4. **413 File Too Large**
+5. **413 File Too Large**
    - Video exceeds MAX_DOWNLOAD_SIZE_MB
    - Check video size with `/api/info` first
+   - Adjust MAX_DOWNLOAD_SIZE_MB in Render environment
 
-5. **No Response / Connection Failed**
+6. **No Response / Connection Failed**
    - Check if service is deployed on Render
-   - Verify URL is correct
-   - Check Render logs for errors
+   - Verify URL is correct (check for typos)
+   - Ensure service hasn't been suspended (check Render dashboard)
+   - Check Render logs for deployment errors
 
 ### Debugging
 
