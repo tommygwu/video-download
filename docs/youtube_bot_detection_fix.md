@@ -57,13 +57,36 @@ python3 -m yt_dlp --cookies-from-browser safari [URL]
 python3 -m yt_dlp --extractor-args "youtube:player_client=ios" --cookies-from-browser chrome [URL]
 ```
 
-## Quick Script
+## Quick Scripts
 
+### Interactive Menu Script
 A helper script `youtube_bot_fix.sh` is available that provides an interactive menu for all these methods.
 
 ```bash
 ./youtube_bot_fix.sh
 ```
+
+### Clean Logging Mode
+For condensed, meaningful output without health check spam:
+
+```bash
+# Direct usage
+python3 yt_dlp_clean_logger.py "https://youtube.com/watch?v=..."
+
+# Or use the shell wrapper
+./clean_download.sh "https://youtube.com/watch?v=..."
+
+# With options
+./clean_download.sh -c ios -v -l download.log "https://youtube.com/watch?v=..."
+```
+
+Clean logging provides:
+- 🎬 Start/end notifications
+- 💚 Server alive status every 5 minutes
+- 📊 Progress at 25%, 50%, 75% milestones  
+- ✅ Completion confirmation
+- 🔇 Silent mode after download
+- No health check spam!
 
 ## Downloading with iOS Client
 
