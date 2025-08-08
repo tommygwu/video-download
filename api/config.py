@@ -23,6 +23,14 @@ class Config:
     # yt-dlp default options
     DEFAULT_FORMAT = 'best[ext=mp4]/best'
     
+    # Cookie configuration
+    YOUTUBE_COOKIES_BASE64 = os.environ.get('YOUTUBE_COOKIES_BASE64', '')
+    USE_COOKIES_FALLBACK = os.environ.get('USE_COOKIES_FALLBACK', 'true').lower() == 'true'
+    
+    # Player client configuration
+    DEFAULT_PLAYER_CLIENT = os.environ.get('DEFAULT_PLAYER_CLIENT', 'ios')
+    FALLBACK_ORDER = os.environ.get('FALLBACK_ORDER', 'ios,cookies,android').split(',')
+    
     @classmethod
     def init_app(cls, app):
         """Initialize application with config"""
