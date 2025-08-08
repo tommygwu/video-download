@@ -62,21 +62,24 @@ In Render Dashboard → Your Service → **Environment**:
 
 ### 4. Choose Service Plan
 
-#### Free Tier (Development)
+#### Free Tier (Recommended to Start)
 - **Cost**: $0/month
 - **Limits**: 
-  - 750 hours/month
-  - Spins down after 15 minutes
-  - No persistent disk
-- **Good for**: Testing, development
+  - 750 hours/month (plenty for a few videos daily)
+  - Spins down after 15 minutes of inactivity
+  - Takes ~2 minutes to spin back up
+  - No persistent disk (uses `/tmp` only)
+  - 100GB bandwidth/month
+- **Perfect for**: Your use case (1-2 hour videos, few downloads daily)
+- **Note**: Videos are downloaded to `/tmp` and streamed immediately, no long-term storage needed
 
-#### Starter Tier (Production)
+#### Starter Tier (Optional Upgrade)
 - **Cost**: $7/month
 - **Benefits**:
-  - Always on
+  - Always on (no spin-down delay)
   - 10GB persistent disk option
-  - Better performance
-- **Good for**: Production use
+  - Better for high-frequency use
+- **Consider if**: You need instant response times or >10 downloads/day
 
 To upgrade:
 1. Go to service **Settings**

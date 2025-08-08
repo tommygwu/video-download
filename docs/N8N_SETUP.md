@@ -307,10 +307,12 @@ Add error handling to your workflows:
    - Use 300000ms (5 minutes) for typical videos
    - Increase for longer videos
 
-3. **Handle Render Free Tier Limits**
+3. **Handle Render Free Tier Spin-down**
    - Service spins down after 15 minutes of inactivity
    - First request after spin-down takes ~2 minutes
-   - Consider implementing a health check cron job
+   - **Solution for n8n**: Add a retry node with 3-minute timeout
+   - **Alternative**: Set up a free cron job to ping `/health` every 10 minutes
+   - **Note**: This is perfect for your "few videos daily" use case
 
 4. **Implement Retry Logic**
    - Add retry nodes for failed downloads

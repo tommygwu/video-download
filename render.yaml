@@ -2,7 +2,7 @@ services:
   - type: web
     name: yt-dlp-api
     runtime: docker
-    plan: starter  # Change to "free" for testing, but no persistent disk
+    plan: free  # Free tier - no persistent disk, spins down after 15 min
     dockerfilePath: ./deploy/Dockerfile
     dockerContext: .  # Use repository root as context
     
@@ -18,13 +18,14 @@ services:
       - key: MAX_FILE_AGE_MINUTES
         value: "30"
       - key: DOWNLOAD_DIR
-        value: /tmp/downloads  # Use /data for persistent disk
+        value: /tmp/downloads  # Free tier only supports /tmp
       - key: FLASK_ENV
         value: production
       - key: PORT
         value: "5000"
     
-    # Uncomment for persistent disk (requires paid plan)
+    # NOTE: Persistent disk requires paid plan ($7/month)
+    # If you upgrade later, uncomment and change DOWNLOAD_DIR to /data/downloads:
     # disk:
     #   name: downloads
     #   mountPath: /data
