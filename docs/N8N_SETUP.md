@@ -86,7 +86,7 @@ https://yt-dlp-api.onrender.com
       "position": [650, 300],
       "parameters": {
         "method": "POST",
-        "url": "https://yt-dlp-api-b1mh.onrender.com/api/download",
+        "url": "https://your-service-name.onrender.com/api/download",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -132,7 +132,7 @@ This workflow first wakes up the Render service before attempting to download:
       "position": [450, 300],
       "parameters": {
         "method": "GET",
-        "url": "https://yt-dlp-api-b1mh.onrender.com/health",
+        "url": "https://your-service-name.onrender.com/health",
         "options": {
           "timeout": 180000,
           "ignoreResponseCode": true
@@ -154,7 +154,7 @@ This workflow first wakes up the Render service before attempting to download:
       "position": [850, 300],
       "parameters": {
         "method": "POST",
-        "url": "https://yt-dlp-api-b1mh.onrender.com/api/download",
+        "url": "https://your-service-name.onrender.com/api/download",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -347,7 +347,7 @@ This workflow first wakes up the Render service before attempting to download:
 
 1. **Parameters Tab:**
    - **Method**: POST
-   - **URL**: `https://yt-dlp-api-b1mh.onrender.com/api/download` (use your actual URL)
+   - **URL**: `https://your-service-name.onrender.com/api/download`
    - **Authentication**: Generic Credential Type
    - **Generic Auth Type**: Header Auth
    - **Header Auth**: Select your created credential (NOT the text "Video Download | Render.com")
