@@ -129,3 +129,33 @@ yt-dlp.zip
 # Plugins
 ytdlp_plugins/
 yt-dlp-plugins
+
+# API Development
+api/__pycache__/
+api/*.pyc
+api/.env
+api/.env.local
+
+# Deployment
+deploy/.env
+*.env.local
+
+# Temporary downloads
+/tmp/downloads/
+downloads/
+
+# Flask
+instance/
+.webassets-cache
+
+# Python
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+
+# Logs
+*.log
+flask.log

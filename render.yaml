@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: yt-dlp-api
+    runtime: docker
+    plan: starter  # Change to "free" for testing, but no persistent disk
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .  # Use repository root as context
+    
+    # Health check path
+    healthCheckPath: /health
+    
+    # Environment variables
+    envVars:
+      - key: YT_DLP_API_KEY
+        generateValue: true  # Auto-generate secure key
+      - key: MAX_DOWNLOAD_SIZE_MB
+        value: "500"
+      - key: MAX_FILE_AGE_MINUTES
+        value: "30"
+      - key: DOWNLOAD_DIR
+        value: /tmp/downloads  # Use /data for persistent disk
+      - key: FLASK_ENV
+        value: production
+      - key: PORT
+        value: "5000"
+    
+    # Uncomment for persistent disk (requires paid plan)
+    # disk:
+    #   name: downloads
+    #   mountPath: /data
+    #   sizeGB: 10
+    
+    # Auto-deploy settings
+    autoDeploy: false  # Set to true if you want automatic deploys from GitHub
+    
+    # Build settings
+    buildFilter:
+      paths:
+        - api/**
+        - deploy/**
+        - yt_dlp/**
+      ignoredPaths:
+        - test/**
+        - docs/**
