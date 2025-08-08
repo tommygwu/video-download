@@ -23,6 +23,38 @@ from werkzeug.exceptions import RequestEntityTooLarge
 import yt_dlp
 import base64
 
+# Import cookie handler
+try:
+    from api.cookie_handler import create_youtube_cookies_file, cleanup_cookies_file, validate_cookies_for_youtube
+except ImportError:
+    # Fallback if module structure is different
+    try:
+        from cookie_handler import create_youtube_cookies_file, cleanup_cookies_file, validate_cookies_for_youtube
+    except ImportError:
+        # Define inline if import fails
+        def create_youtube_cookies_file(cookies_base64):
+            if not cookies_base64:
+                return None
+            try:
+                cookies_content = base64.b64decode(cookies_base64).decode('utf-8')
+                cookies_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+                cookies_file.write(cookies_content)
+                cookies_file.close()
+                return cookies_file.name
+            except Exception as e:
+                app.logger.error(f"Failed to create cookies file: {e}")
+                return None
+        
+        def cleanup_cookies_file(filepath):
+            if filepath and os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    pass
+        
+        def validate_cookies_for_youtube(cookies_file):
+            return True  # Skip validation in fallback mode
+
 app = Flask(__name__)
 
 # Configure logging
@@ -53,37 +85,25 @@ cleanup_thread = None
 YOUTUBE_COOKIES_BASE64 = os.environ.get('YOUTUBE_COOKIES_BASE64', '')
 USE_COOKIES_FALLBACK = os.environ.get('USE_COOKIES_FALLBACK', 'true').lower() == 'true'
 DEFAULT_PLAYER_CLIENT = os.environ.get('DEFAULT_PLAYER_CLIENT', 'tv')
-# Default fallback order: TV → iOS → cookies → Android
-FALLBACK_ORDER = os.environ.get('FALLBACK_ORDER', 'tv,ios,cookies,android').split(',')
+# Default fallback order: Android → iOS → TV → cookies (Android seems most reliable)
+FALLBACK_ORDER = os.environ.get('FALLBACK_ORDER', 'android,ios,tv,cookies').split(',')
 
 def get_cookies_file():
     """Create temporary cookies file from base64 environment variable"""
     if not YOUTUBE_COOKIES_BASE64:
         return None
     
-    try:
-        # Decode base64 cookies
-        cookies_content = base64.b64decode(YOUTUBE_COOKIES_BASE64).decode('utf-8')
-        
-        # Create temporary file
-        cookies_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
-        cookies_file.write(cookies_content)
-        cookies_file.close()
-        
-        app.logger.info(f"Created temporary cookies file: {cookies_file.name}")
-        return cookies_file.name
-    except Exception as e:
-        app.logger.error(f"Failed to create cookies file: {e}")
-        return None
-
-def cleanup_cookies_file(filepath):
-    """Remove temporary cookies file"""
-    if filepath and os.path.exists(filepath):
-        try:
-            os.remove(filepath)
-            app.logger.info(f"Cleaned up cookies file: {filepath}")
-        except Exception as e:
-            app.logger.error(f"Failed to cleanup cookies file: {e}")
+    # Use the improved cookie handler
+    cookies_file = create_youtube_cookies_file(YOUTUBE_COOKIES_BASE64)
+    
+    if cookies_file:
+        # Validate cookies
+        if validate_cookies_for_youtube(cookies_file):
+            app.logger.info(f"Created and validated cookies file: {cookies_file}")
+        else:
+            app.logger.warning(f"Cookies file created but validation failed: {cookies_file}")
+    
+    return cookies_file
 
 def create_ydl_opts_with_fallback(base_opts, url, player_client=None):
     """Create yt-dlp options with fallback strategy"""
@@ -175,7 +195,10 @@ def extract_info_with_fallback(url, base_opts, fallback_order=None, download=Fal
                 app.logger.info(f"✅ {'Download' if download else 'Info extraction'} successful with {method}")
                 # Cleanup cookies if used
                 if cookies_file:
-                    threading.Timer(5, lambda: cleanup_cookies_file(cookies_file)).start()
+                    def cleanup_with_log():
+                        cleanup_cookies_file(cookies_file)
+                        app.logger.info(f"Cleaned up cookies file: {cookies_file}")
+                    threading.Timer(5, cleanup_with_log).start()
                 return True, info, downloaded_file
                     
         except yt_dlp.utils.DownloadError as e:
@@ -329,9 +352,9 @@ def get_video_info():
             return jsonify({'error': 'Missing parameter', 'message': 'URL is required'}), 400
         
         # Get player client preference
-        player_client = data.get('player_client', DEFAULT_PLAYER_CLIENT)
-        if player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies']:
-            player_client = DEFAULT_PLAYER_CLIENT
+        player_client = data.get('player_client', None)  # Don't default here
+        if player_client and player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies', 'auto']:
+            player_client = None  # Invalid client, use default fallback
         
         base_opts = {
             'quiet': True,
@@ -426,9 +449,9 @@ def download_video():
         max_duration = data.get('max_duration', 7200)  # Default 2 hours
         
         # Get player client preference
-        player_client = data.get('player_client', DEFAULT_PLAYER_CLIENT)
-        if player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies']:
-            player_client = DEFAULT_PLAYER_CLIENT
+        player_client = data.get('player_client', None)  # Don't default here
+        if player_client and player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies', 'auto']:
+            player_client = None  # Invalid client, use default fallback
         
         # Generate unique filename
         video_id = hashlib.md5(f"{url}{time.time()}".encode()).hexdigest()[:12]
@@ -464,7 +487,8 @@ def download_video():
         app.logger.info(f"Format preference: {format_preference}")
         app.logger.info(f"Max duration: {max_duration}s, Max size: {MAX_DOWNLOAD_SIZE_MB}MB")
         
-        # Always use fallback mechanism, but prioritize user-specified client
+        # Use fallback mechanism 
+        # Only create custom order if player_client is explicitly specified and valid
         if player_client and player_client != 'auto':
             # Create custom fallback order with user-specified client first
             custom_fallback_order = [player_client]
@@ -475,8 +499,9 @@ def download_video():
             app.logger.info(f"Using custom fallback order: {custom_fallback_order}")
             success, info, downloaded_file = download_with_fallback(url, base_opts, custom_fallback_order)
         else:
-            # Use default fallback order
-            success, info, downloaded_file = download_with_fallback(url, base_opts)
+            # Use default fallback order from environment
+            app.logger.info(f"Using default fallback order: {FALLBACK_ORDER}")
+            success, info, downloaded_file = download_with_fallback(url, base_opts, FALLBACK_ORDER)
         
         if not success:
             app.logger.error(f"All download methods failed for URL: {url}")
@@ -546,9 +571,9 @@ def stream_video():
         format_preference = data.get('format', 'best[ext=mp4]/best')
         
         # Get player client preference
-        player_client = data.get('player_client', DEFAULT_PLAYER_CLIENT)
-        if player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies']:
-            player_client = DEFAULT_PLAYER_CLIENT
+        player_client = data.get('player_client', None)  # Don't default here
+        if player_client and player_client not in ['ios', 'android', 'mweb', 'web', 'tv', 'cookies', 'auto']:
+            player_client = None  # Invalid client, use default fallback
         
         app.logger.info(f"Streaming with player client: {player_client}")
         
